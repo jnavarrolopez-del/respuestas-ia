@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Respuestas IA para Excel.
-  Usa un runtime compartido de vida larga: tras la configuración inicial,
-  el código se carga en segundo plano al abrir cualquier libro, sin panel visible.
-  Si lo alojas en otro sitio, sustituye https://localhost:3000 por tu URL HTTPS.
+  Análisis de reservas (Cuotivo). Mismo ID que la versión anterior del complemento.
+  Versión local: https://localhost:3000 (node server.js).
 -->
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -14,8 +12,8 @@
   <Version>1.0.0.0</Version>
   <ProviderName>Uso personal</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
-  <DisplayName DefaultValue="Respuestas IA"/>
-  <Description DefaultValue="Copia una pregunta de una celda y pégala en una celda vacía: la respuesta aparece sola."/>
+  <DisplayName DefaultValue="Análisis de reservas"/>
+  <Description DefaultValue="Análisis de reservas de talleres (Cuotivo): taller de demostración, cifras por día, franja y servicio, recomendaciones y gráfico."/>
   <IconUrl DefaultValue="https://localhost:3000/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:3000/assets/icon-80.png"/>
   <SupportUrl DefaultValue="https://localhost:3000/taskpane.html"/>
@@ -64,21 +62,6 @@
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
-                <Control xsi:type="Button" id="RespuestasIA.SolveButton">
-                  <Label resid="Solve.Label"/>
-                  <Supertip>
-                    <Title resid="Solve.Label"/>
-                    <Description resid="Solve.Tooltip"/>
-                  </Supertip>
-                  <Icon>
-                    <bt:Image size="16" resid="Icon.16"/>
-                    <bt:Image size="32" resid="Icon.32"/>
-                    <bt:Image size="80" resid="Icon.80"/>
-                  </Icon>
-                  <Action xsi:type="ExecuteFunction">
-                    <FunctionName>resolverSeleccion</FunctionName>
-                  </Action>
-                </Control>
               </Group>
             </OfficeTab>
           </ExtensionPoint>
@@ -95,15 +78,12 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3000/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="Group.Label" DefaultValue="Respuestas IA"/>
-        <bt:String id="Button.Label" DefaultValue="Configurar clave"/>
-        <bt:String id="Solve.Label" DefaultValue="Resolver selección"/>
+        <bt:String id="Group.Label" DefaultValue="Reservas del taller"/>
+        <bt:String id="Button.Label" DefaultValue="Análisis de reservas"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="Button.Tooltip" DefaultValue="Solo hace falta una vez: introduce tu clave de acceso a la IA."/>
-        <bt:String id="Solve.Tooltip" DefaultValue="Rellena con IA las celdas vacías marcadas de la selección (atajo: Ctrl+Alt+R). Con Ctrl+A resuelve toda la hoja."/>
+        <bt:String id="Button.Tooltip" DefaultValue="Abre el panel para cargar reservas de demostración, analizarlas y crear el gráfico de reservas por día."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
-  <ExtendedOverrides Url="https://localhost:3000/shortcuts.json"/>
 </OfficeApp>

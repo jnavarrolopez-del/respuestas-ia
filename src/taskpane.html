@@ -3,50 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Respuestas IA</title>
+  <title>Análisis de reservas</title>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-  <script src="logic.js"></script>
+  <script src="reservas.js"></script>
   <style>
     :root {
       --bg: #ffffff;
+      --surface: #f5f7f6;
       --text: #1f1f1f;        /* 16,1:1 sobre blanco */
       --muted: #545454;       /* 7,6:1 */
-      --border: #767676;      /* 4,5:1, borde de campos */
+      --border: #c8cfcb;
       --accent: #107c41;      /* verde Excel, 5,3:1 con texto blanco */
       --accent-hover: #0c5e31;
       --disabled-bg: #e6e6e6;
-      --disabled-text: #4a4a4a; /* 7,6:1 sobre #e6e6e6 */
+      --disabled-text: #4a4a4a;
       --error: #a4262c;       /* 6,9:1 */
-      --ok: #0c5e31;          /* 7,9:1 */
+      --ok: #0c5e31;
       --focus: #0f6cbd;
+      --bar: #107c41;
+      --bar-bg: #e3ece7;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--text); }
     body {
       font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
-      padding: 20px 16px;
-      max-width: 480px;
+      padding: 16px;
+      max-width: 520px;
       overflow-wrap: anywhere;
     }
-    h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
-    p { margin: 0 0 16px; }
-    .hint { color: var(--muted); font-size: 14px; }
-    label { display: block; font-weight: 600; margin-bottom: 6px; }
-    input {
-      width: 100%;
-      min-height: 44px;
-      padding: 10px 12px;
-      font: inherit;
-      color: var(--text);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-    }
-    input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0; }
+    h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+    p { margin: 0; }
+    .sub { color: var(--muted); font-size: 14px; margin: 2px 0 16px; }
+    .paso { margin-bottom: 12px; }
+    .paso .hint { color: var(--muted); font-size: 14px; margin-top: 4px; }
     button {
       width: 100%;
       min-height: 44px;
-      margin-top: 12px;
       padding: 10px 16px;
       font: inherit;
       font-weight: 600;
@@ -56,31 +49,93 @@
       border-radius: 4px;
       cursor: pointer;
     }
-    button:hover:not(:disabled) { background: var(--accent-hover); }
-    button:disabled { background: var(--disabled-bg); color: var(--disabled-text); cursor: default; }
-    #status { min-height: 24px; margin: 12px 0 0; }
-    #status.error { color: var(--error); }
-    #status.ok { color: var(--ok); }
-    ol { margin: 0 0 16px; padding-left: 22px; }
-    li { margin-bottom: 4px; }
+    button.secundario { background: var(--bg); color: var(--accent); border: 1px solid var(--accent); }
+    button:hover:not(:disabled) { background: var(--accent-hover); color: #ffffff; }
+    button:disabled { background: var(--disabled-bg); color: var(--disabled-text); border-color: transparent; cursor: default; }
+    button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    #estado { min-height: 24px; margin: 8px 0 16px; font-size: 15px; }
+    #estado.error { color: var(--error); }
+    #estado.ok { color: var(--ok); }
+    .tarjeta { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+    .cifras { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .cifra strong { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+    .cifra span { font-size: 14px; color: var(--muted); }
+    ul.barras { list-style: none; margin: 0; padding: 0; }
+    ul.barras li { display: grid; grid-template-columns: minmax(3.5em, 9em) minmax(24px, 1fr) auto; gap: 8px; align-items: center; margin: 4px 0; font-size: 15px; }
+    .barra { height: 10px; background: var(--bar-bg); border-radius: 5px; overflow: hidden; }
+    .barra i { display: block; height: 100%; background: var(--bar); }
+    .valor { font-variant-numeric: tabular-nums; font-size: 14px; color: var(--text); white-space: nowrap; }
+    .dos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    ol.recs { margin: 0; padding-left: 22px; }
+    ol.recs li { margin-bottom: 8px; }
+    .nota { color: var(--muted); font-size: 14px; }
+    @media (max-width: 360px) { .dos, .cifras { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>Respuestas IA</h1>
-    <p>Introduce tu clave de acceso a la IA. Solo hace falta una vez.</p>
+    <h1>Análisis de reservas</h1>
+    <p class="sub">Cuotivo · versión con taller de demostración</p>
 
-    <form id="form" novalidate>
-      <label for="key">Clave de acceso (Anthropic)</label>
-      <input id="key" name="key" type="password" autocomplete="off" spellcheck="false"
-             placeholder="sk-ant-…" aria-describedby="keyHint status">
-      <p id="keyHint" class="hint" style="margin-top:6px">Se guarda solo en este equipo. No se escribe en el libro.</p>
-      <button id="save" type="submit" disabled>Guardar clave</button>
-      <p id="status" role="status" aria-live="polite"></p>
-    </form>
+    <div class="paso">
+      <button id="btnDemo" type="button" disabled>Cargar taller de demostración</button>
+      <p class="hint">Crea una hoja con unas 150 reservas inventadas de los últimos 2 meses.</p>
+    </div>
+    <div class="paso">
+      <button id="btnAnalizar" type="button" disabled>Analizar reservas</button>
+      <p class="hint">Analiza la hoja de reservas abierta (o la última de demostración).</p>
+    </div>
+    <div class="paso">
+      <button id="btnGrafico" type="button" class="secundario" disabled>Crear gráfico</button>
+      <p class="hint">Crea una hoja con el gráfico de reservas por día.</p>
+    </div>
 
-    <p class="hint">Uso: copia una celda con una pregunta, una etiqueta o un encabezado y pégala en una celda vacía. Aparece sola la respuesta o la fórmula.</p>
-    <p class="hint">Para poder calcular, la IA recibe el texto pegado y el contenido de las hojas de este libro (valores y fórmulas).</p>
+    <p id="estado" role="status" aria-live="polite">Abriendo Excel…</p>
+
+    <section id="resultados" hidden aria-label="Resultados del análisis">
+      <div class="tarjeta">
+        <h2>Resumen</h2>
+        <div class="cifras">
+          <div class="cifra"><strong id="rTotal">–</strong><span>reservas</span></div>
+          <div class="cifra"><strong id="rMedia">–</strong><span>de media al día</span></div>
+          <div class="cifra"><strong id="rAceptadas">–</strong><span>aceptadas</span></div>
+        </div>
+        <p class="nota" id="rPeriodo" style="margin-top:8px"></p>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Días con más reservas</h2>
+        <ul class="barras" id="rDias"></ul>
+      </div>
+
+      <div class="tarjeta dos">
+        <div>
+          <h2>Franjas más llenas</h2>
+          <ul class="barras" id="rLlenas"></ul>
+        </div>
+        <div>
+          <h2>Franjas más vacías</h2>
+          <ul class="barras" id="rVacias"></ul>
+        </div>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Servicios más pedidos</h2>
+        <ul class="barras" id="rServicios"></ul>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Estado de las reservas</h2>
+        <ul class="barras" id="rEstados"></ul>
+      </div>
+
+      <div class="tarjeta">
+        <h2>Recomendaciones para el taller</h2>
+        <p class="nota" id="rRecsEstado" aria-live="polite"></p>
+        <ol class="recs" id="rRecs"></ol>
+        <p class="nota">Las genera Claude solo con las cifras de arriba: no recibe matrículas ni reservas sueltas.</p>
+      </div>
+    </section>
   </main>
   <script type="module" src="taskpane.js"></script>
 </body>

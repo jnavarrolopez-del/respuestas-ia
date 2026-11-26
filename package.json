@@ -1,0 +1,16 @@
+{
+  "name": "analisis-reservas-cuotivo",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Complemento de Excel: análisis de reservas de talleres (Cuotivo), con recomendaciones de Claude a través de un servidor.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,105 +1,86 @@
-# Respuestas IA para Excel
+# Análisis de reservas (Cuotivo) · complemento de Excel
 
-Copia una celda con una pregunta, una etiqueta o un encabezado y pégala en una celda vacía: aparece sola la respuesta o la fórmula que corresponde a esa celda. Sin paneles ni avisos.
+Panel de Excel para analizar las reservas de un taller mecánico. Esta versión **no se conecta a Cuotivo**: trabaja con un taller de demostración.
 
-## Cómo funciona
+## Qué hace
 
-1. Al **seleccionar** celdas con texto (para copiarlas), el complemento guarda esos textos solo en memoria.
-2. Al **seleccionar el destino**, toma una foto de esas celdas: si están vacías, su formato numérico y si tienen lista desplegable.
-3. Al **pegar**, cada celda que estaba vacía y ahora contiene uno de esos textos se envía a la IA junto con el **contenido del libro**: valores y fórmulas de sus hojas, marcando las celdas vacías con relleno claro (las que el libro pide completar).
-4. Si el valor se puede calcular con el libro, la IA devuelve una **fórmula** (por ejemplo `=AVERAGE(B10:B19)` o `='2_Tasas'!D11`); si no, un valor. Sustituye al texto pegado y se recupera el formato numérico y la lista desplegable que tenía la celda. Si la fórmula está mal escrita (#¿NOMBRE?, #REF!), no se deja.
+1. **Cargar taller de demostración**: crea una hoja «Reservas demo» con unas 150 reservas inventadas de los últimos 2 meses:
+   - columnas: fecha, hora de entrega, matrícula, servicio, estado y reprogramada (sí/no);
+   - de lunes a viernes, en jornada partida (9:00–14:00 y 16:00–19:00) y en franjas de 30 minutos.
+2. **Analizar reservas**: calcula **con código** (sin IA):
+   - los días de la semana con más reservas;
+   - las 3 franjas más llenas y las 3 más vacías;
+   - los servicios más pedidos;
+   - el % de reservas aceptadas (confirmada, en taller, lista o entregada), reprogramadas, canceladas, rechazadas, no presentadas y pendientes.
 
-### Resolver una zona o una hoja entera (Ctrl+Alt+R)
+   Después envía **solo esas cifras agregadas** al servidor, que pide a Claude 2 o 3 recomendaciones cortas para el dueño, en español y tuteando. Nunca se envían matrículas ni reservas sueltas.
+3. **Crear gráfico**: crea la hoja «Gráfico de reservas» con la tabla de reservas por día y un gráfico de columnas.
 
-1. Selecciona la zona que quieres resolver, o toda la hoja con **Ctrl+A**.
-2. Pulsa **Ctrl+Alt+R** (en Mac, Cmd+Opción+R), o el botón **Inicio → Resolver selección**.
-3. La IA rellena las **celdas vacías con relleno claro** (las amarillas que el libro marca para completar). Si la zona no tiene celdas marcadas, rellena sus celdas vacías (hasta 60).
+Analiza la hoja abierta si tiene las columnas Fecha, Hora de entrega, Servicio y Estado. Si no, usa la última hoja de demostración.
 
-No hace falta copiar el enunciado ni los datos: la IA ya lee todas las hojas del libro. Conviene resolver las hojas en orden, porque unas usan los resultados de otras. Una fórmula que da #DIV/0! o #N/A se deja escrita, porque suele deberse a celdas que aún faltan y se arregla sola al completarlas. Las que dan #¿NOMBRE? o #REF! no se escriben.
+## La clave de Claude va en el servidor
 
-**Ejemplos con pegar:**
-- Copia la etiqueta «Media aritmética (x̄)» (F10) y pégala en la celda vacía de al lado (G10): aparece `=AVERAGE(B10:B19)`.
-- Copia el encabezado «Índice en serie (base 2014=100)» (C9) y pégalo en todo el hueco de la columna (C10:C20): cada fila recibe su fórmula.
-- Copia «¿Cuál es la capital de Francia?» y pégala en una celda vacía: aparece «París».
+El navegador nunca ve la clave. El panel llama a `POST /api/recomendaciones` y el servidor:
 
-| Celda de destino | Respuesta escrita |
-|---|---|
-| Formato numérico (`0`, `0,00`, `#.##0 €`), o encabezado de columna tipo «Cantidad», «Precio», «Año» | Número |
-| Formato de porcentaje | Porcentaje (0,25 → 25 %) |
-| Formato de fecha | Fecha |
-| Lista desplegable | Una de las opciones de la lista (o nada, si la respuesta no coincide con ninguna) |
-| Formato Texto (`@`) | Texto breve |
-| General | Número si la respuesta es un número; la letra de la opción si es tipo test; si no, texto breve |
+- comprueba que el cuerpo tiene la forma exacta de las cifras agregadas y descarta cualquier otro campo;
+- llama a Claude (`claude-opus-5-5`) con la clave guardada en `ANTHROPIC_API_KEY`;
+- limita las peticiones a 10 por minuto y por IP.
 
-La tabla de arriba se aplica cuando la IA devuelve un valor; las fórmulas se escriben tal cual, con el formato numérico que tenía la celda.
+Hay dos servidores con la misma lógica (`server/recomendaciones.js`):
 
-**Varias preguntas:** copia, por ejemplo, `F10:F27` y pega en `G10`. Cada celda recibe lo que corresponde al texto que cayó en ella, en el mismo orden.
+- **Local**: `server.js` sirve el panel en `https://localhost:3000` y lee la clave de `.env`.
+- **Vercel**: `api/recomendaciones.js`. La clave se guarda en las variables de entorno del proyecto.
 
-**Estados:**
-- El texto pegado no pide nada (solo estás copiando un dato), o la celda ya tenía contenido propio: no se hace nada.
-- Mientras responde la IA: la celda muestra la pregunta pegada hasta que llega la respuesta.
-- Error (sin conexión, la IA no lo sabe, la respuesta no encaja con el tipo de la celda): no se escribe nada y se añade una nota en la celda. Pega de nuevo en esa celda para reintentar; si sale bien, la nota desaparece.
+GitHub Pages solo sirve archivos, no ejecuta servidores. Con la versión publicada allí funcionan la demostración, el análisis y el gráfico, pero **no las recomendaciones**: el panel lo avisa.
 
-## Requisitos
+## Configurar y probar en local
 
-- Excel para Windows o Mac (Microsoft 365), o Excel en la web. Hace falta compatibilidad con el runtime compartido (*SharedRuntime 1.1*) y *ExcelApi 1.9*. Las notas de error usan *ExcelApi 1.18*; en versiones anteriores se usa un comentario.
-- Node.js (para el servidor local).
-- Una clave de API de Anthropic. Las respuestas se cobran en tu cuenta de Anthropic. Se usa el modelo `claude-opus-5-5`, que puedes cambiar en `src/addin.js` (`MODEL`).
+1. Instala las dependencias (una vez):
 
-## Instalación (una vez)
+   ```powershell
+   npm install
+   ```
 
-1. Certificado HTTPS local para Office. Esta orden instala un certificado de desarrollo de confianza en Windows; revísala antes de ejecutarla:
+2. Crea el archivo `.env` en esta carpeta, con tu clave de Anthropic. Está en `.gitignore`, así que no se sube a GitHub:
+
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+3. Si no los tienes, instala los certificados de desarrollo de Office (una vez):
 
    ```powershell
    npx office-addin-dev-certs install
    ```
 
-2. Arranca el servidor, que debe estar en marcha mientras uses Excel:
+4. Arranca el servidor:
 
    ```powershell
-   node server.js
+   npm start
    ```
 
-3. Carga el complemento en Excel:
-   - **Excel en la web:** Inicio > Complementos > Más complementos > Mis complementos > *Cargar mi complemento* y elige `manifest.xml`.
-   - **Excel para Windows:**
+5. En Excel web: **Complementos → Más complementos → Administrar mis complementos ▾ → Cargar mi complemento** → `manifest-local.xml`.
+6. En **Inicio**, pulsa **Análisis de reservas** y sigue los tres botones en orden.
 
-     ```powershell
-     npx office-addin-debugging start manifest.xml desktop
-     ```
+## Publicarlo con recomendaciones (Vercel)
 
-     Otra opción es una carpeta compartida como catálogo de confianza (Archivo > Opciones > Centro de confianza > Catálogos de complementos de confianza).
+1. Importa este repositorio en Vercel. No necesita comando de compilación.
+2. En **Settings → Environment Variables**, añade `ANTHROPIC_API_KEY`.
+3. En `manifest.xml`, cambia `https://jnavarrolopez-del.github.io/respuestas-ia/src` por `https://TU-PROYECTO.vercel.app/src`. Mantén el mismo `<Id>`.
+4. Vuelve a cargar `manifest.xml` en Excel.
 
-4. En la pestaña **Inicio**, pulsa **Configurar clave**, pega tu clave y pulsa **Guardar clave**. El panel se cierra solo. A partir de ese momento el complemento se carga en segundo plano cada vez que abras un libro.
+## Pruebas
 
-**Versión publicada:** `manifest.xml` apunta a GitHub Pages (`https://jnavarrolopez-del.github.io/respuestas-ia/src/`), así que no hace falta tener `node server.js` encendido. Para probar cambios en local usa `manifest-local.xml`, que apunta a `https://localhost:3000`.
+```powershell
+npm test
+```
 
-## Privacidad
-
-- La clave se guarda en el almacenamiento local del complemento en este equipo, no en el libro.
-- A la IA (Anthropic) se envía el texto pegado, la hoja y celda de destino, el tipo esperado y el **contenido de las hojas visibles del libro** (hasta 20 hojas, 120 filas y 26 columnas por hoja: valores y fórmulas). No uses el complemento en libros con datos que no quieras compartir con Anthropic.
-- Cada pegado que lo activa es una llamada de pago a la API. Con el contexto del libro, cuesta más que una pregunta suelta.
-- La última pregunta copiada y las fotos de las celdas de destino solo existen en memoria y se pierden al cerrar Excel.
-
-## Limitaciones
-
-- Office no deja leer el portapapeles. Por eso el complemento identifica lo copiado como la **última selección de la hoja que contenía preguntas**, y lo reconoce al pegarlo. No funciona con preguntas copiadas desde otro programa u otro libro.
-- Cualquier texto copiado de la hoja y pegado en una celda vacía activa el complemento; si la IA decide que no se pide nada, la celda queda con lo pegado. Por eso, copiar y pegar textos normales también hace una llamada a la IA.
-- La IA puede equivocarse en una fórmula aunque no dé error. Revisa los resultados, por ejemplo con los valores de control del libro.
-- Un pegado normal sobrescribe también colores y bordes del destino. El complemento solo recupera el formato numérico y la lista desplegable. Para conservar todo el formato, usa *Pegar valores*.
-- Si el destino tenía contenido, Excel ya lo ha sobrescrito al pegar. El complemento no lo toca más, y Ctrl+Z lo recupera.
-- Como máximo 400 celdas por pegado.
+Prueban la generación de reservas, el análisis, la lectura y escritura de las hojas, y el servidor (con una IA simulada, sin gastar saldo).
 
 ## Archivos
 
-- `manifest.xml`: manifiesto del complemento, con runtime compartido de vida larga.
-- `src/taskpane.html` y `src/taskpane.js`: pantalla de configuración de la clave y arranque en segundo plano.
-- `src/addin.js`: eventos de Excel, llamada a la IA y escritura de las respuestas.
-- `src/logic.js`: reglas sin dependencias (detección, tipos, conversión de valores), con pruebas en `test/`.
-- `server.js`: servidor HTTPS local sin dependencias.
-
-Pruebas:
-
-```powershell
-node --test test/logic.test.js
-```
+- `manifest.xml` (publicado) y `manifest-local.xml` (local): mismo ID que la versión anterior del complemento.
+- `src/taskpane.html` y `src/taskpane.js`: el panel y las operaciones de Excel (hojas, tabla y gráfico).
+- `src/reservas.js`: generador de demostración y análisis, sin dependencias.
+- `server/recomendaciones.js`: validación de las cifras y llamada a Claude.
+- `server.js`: servidor local. `api/recomendaciones.js`: función para Vercel.
