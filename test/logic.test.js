@@ -98,7 +98,70 @@ test("findPastedQuestions: reintento sobre una celda que falló", () => {
   assert.deepEqual(res, [{ r: 0, c: 0, question: "¿Q1?" }]);
 });
 
-test("el mensaje a la IA solo lleva la pregunta y el tipo", () => {
-  const msg = JSON.parse(L.buildUserMessage([{ id: 0, question: "¿2+2?", kind: "number", extra: "secreto" }]));
-  assert.deepEqual(msg, [{ id: 0, question: "¿2+2?", expected: "number" }]);
+test("el mensaje a la IA lleva el contexto y las celdas", () => {
+  const msg = L.buildUserMessage(
+    [{ id: 0, sheet: "5_Estadistica", address: "G10", question: "Media aritmética (x̄)", kind: "auto", extra: "no" }],
+    "### Hoja 'X'\nA1: hola"
+  );
+  assert.ok(msg.startsWith("CONTEXTO DEL LIBRO:\n### Hoja 'X'"));
+  const cells = JSON.parse(msg.split("CELDAS:\n")[1]);
+  assert.deepEqual(cells, [{ id: 0, hoja: "5_Estadistica", celda: "G10", texto_pegado: "Media aritmética (x̄)", expected: "auto" }]);
+  assert.ok(!L.buildUserMessage([{ id: 1, question: "¿2+2?", kind: "number" }]).includes("CONTEXTO"));
+});
+
+test("columnas y direcciones de celda", () => {
+  assert.equal(L.columnLetter(0), "A");
+  assert.equal(L.columnLetter(25), "Z");
+  assert.equal(L.columnLetter(26), "AA");
+  assert.equal(L.columnLetter(701), "ZZ");
+  assert.equal(L.columnLetter(702), "AAA");
+  assert.equal(L.cellAddress(9, 6), "G10");
+});
+
+test("collectTexts acepta etiquetas y encabezados, no fórmulas ni números", () => {
+  assert.deepEqual(L.collectTexts([["Media aritmética (x̄)", 4.91, "=A1", "", "x"], ["Índice en serie"]]), [
+    "Media aritmética (x̄)",
+    "Índice en serie",
+  ]);
+});
+
+test("una fórmula de la IA tiene prioridad y se valida", () => {
+  const ai = (formula, answer = "") => ({ status: "ok", formula, answer, option_label: "", option_text: "" });
+  assert.deepEqual(L.coerceAnswer(ai("=AVERAGE(B10:B19)"), { kind: "number" }), { ok: true, formula: "=AVERAGE(B10:B19)" });
+  assert.deepEqual(L.coerceAnswer(ai("  ='2_Tasas'!D11 "), { kind: "auto" }), { ok: true, formula: "='2_Tasas'!D11" });
+  // Sin "=" o con saltos de línea no es una fórmula válida: se usa answer.
+  assert.deepEqual(L.coerceAnswer(ai("AVERAGE(B1:B2)", "4"), { kind: "auto" }), { ok: true, value: 4 });
+  assert.deepEqual(L.coerceAnswer(ai("=A1\n+A2", ""), { kind: "auto" }), { ok: false, reason: "unknown" });
+  assert.deepEqual(L.coerceAnswer({ status: "unknown", formula: "=A1", answer: "" }, { kind: "auto" }), { ok: false, reason: "unknown" });
+});
+
+test("buildWorkbookContext: hoja activa primero, celdas a rellenar marcadas, recorte", () => {
+  const sheets = [
+    { name: "Datos", rowIndex: 0, columnIndex: 0, formulas: [["Año", "Café"], [2014, 8.2]] },
+    {
+      name: "5_Estadistica",
+      rowIndex: 8,
+      columnIndex: 5,
+      formulas: [["Medida", "Valor"], ["Media", ""], ["Mediana", ""]],
+      marks: [[false, false], [false, true], [false, false]],
+    },
+  ];
+  const ctx = L.buildWorkbookContext(sheets, "5_Estadistica");
+  assert.ok(ctx.indexOf("### Hoja '5_Estadistica' (activa)") < ctx.indexOf("### Hoja 'Datos'"));
+  assert.ok(ctx.includes("F9: Medida"));
+  assert.ok(ctx.includes("G10:  [RELLENAR]"));
+  assert.ok(!ctx.includes("G11"));
+  assert.ok(ctx.includes("B2: 8.2"));
+  const withValues = L.buildWorkbookContext(
+    [{ name: "T", rowIndex: 9, columnIndex: 0, formulas: [["='2_Tasas'!A11", "=1/3"]], values: [[2015, 0.3333333333333333]] }],
+    "T"
+  );
+  assert.ok(withValues.includes("A10: ='2_Tasas'!A11 → 2015"));
+  assert.ok(withValues.includes("B10: =1/3 → 0.3333333333"));
+  const small = L.buildWorkbookContext(sheets, "Datos", { maxChars: 260 });
+  assert.ok(small.length <= 300);
+});
+
+test("el esquema de respuesta exige la fórmula", () => {
+  assert.ok(L.ANSWER_SCHEMA.properties.answers.items.required.includes("formula"));
 });

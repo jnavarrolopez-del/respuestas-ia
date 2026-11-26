@@ -2,14 +2,16 @@
  * Respuestas IA — código que corre en segundo plano dentro de Excel.
  *
  * Flujo:
- *  1. Al seleccionar celdas con preguntas (paso previo a copiarlas), se guardan
- *     esos textos solo en memoria: es "la última pregunta copiada".
+ *  1. Al seleccionar celdas con texto (paso previo a copiarlas), se guardan esos textos
+ *     solo en memoria: es "lo último copiado" (una pregunta, una etiqueta o un encabezado).
  *  2. Al seleccionar otra zona (el destino), se toma una foto local de esas celdas:
- *     contenido previo, formato numérico y lista desplegable. Nada de esto sale del equipo.
- *  3. Cuando Excel pega en el destino, cada celda que antes estaba vacía y ahora
- *     contiene una de esas preguntas se envía a la IA (solo el texto de la pregunta
- *     y el tipo de respuesta esperado) y la respuesta sustituye a la pregunta.
- *  4. Si algo falla, la celda no se toca y se añade una nota discreta. Pegar de nuevo reintenta.
+ *     contenido previo, formato numérico y lista desplegable.
+ *  3. Cuando Excel pega en el destino, cada celda que antes estaba vacía y ahora contiene
+ *     uno de esos textos se envía a la IA junto con el contenido del libro (valores y
+ *     fórmulas de sus hojas). La IA devuelve una fórmula (si se puede calcular con el libro)
+ *     o un valor, que sustituye al texto pegado.
+ *  4. Si algo falla, o la fórmula da error, la celda queda con lo pegado y se añade una nota.
+ *     Pegar de nuevo reintenta.
  */
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.5.0/+esm";
 
@@ -18,9 +20,13 @@ const L = window.RespuestasLogic;
 export const MODEL = "claude-opus-5-5";
 const KEY_STORAGE = "respuestas-ia.apiKey";
 const MAX_CELLS = 400; // límite por selección/pegado para no bloquear Excel
-const BATCH_SIZE = 25; // preguntas por llamada a la IA
+const BATCH_SIZE = 25; // celdas por llamada a la IA
+const CONTEXT_MAX_SHEETS = 20; // hojas que se leen como contexto
+const CONTEXT_MAX_ROWS = 120;
+const CONTEXT_MAX_COLS = 26;
 const NOTE_MARK = "Respuestas IA:";
 const NOTE_TEXT = `${NOTE_MARK} no se pudo obtener la respuesta. Vuelve a pegar la pregunta aquí para reintentar.`;
+const NOTE_FORMULA = `${NOTE_MARK} la fórmula propuesta daba error y no se ha escrito. Vuelve a pegar aquí para reintentar.`;
 const NOTE_NO_KEY = `${NOTE_MARK} falta la clave de acceso a la IA (Inicio > Configurar clave). Después, vuelve a pegar.`;
 
 /* ---------- Clave de acceso ---------- */
@@ -41,7 +47,7 @@ export function makeClient(apiKey) {
   return new Anthropic({
     apiKey,
     dangerouslyAllowBrowser: true, // complemento personal: la clave es del propio usuario y vive solo en este equipo
-    timeout: 60_000,
+    timeout: 180_000, // con el contexto del libro, la IA puede tardar más
     maxRetries: 2,
   });
 }
@@ -54,7 +60,6 @@ const state = {
   snapshots: new Map(), // clave de celda -> { value, numberFormat, listOptions, listRule, header }
   failed: new Map(), // clave de celda -> { question, snap, marked }
   pending: new Set(),
-  cache: new Map(), // `${tipo}|${pregunta}` -> respuesta de la IA
 };
 
 const cellKey = (sheetId, row, col) => `${sheetId}|${row}|${col}`;
@@ -106,7 +111,7 @@ async function onSelectionChanged(e) {
     sel.load("values");
     await ctx.sync();
 
-    const questions = L.collectQuestions(sel.values);
+    const questions = L.collectTexts(sel.values);
     if (questions.length > 0) {
       state.sourceQuestions = new Set(questions);
       state.sourceDims = { rows: sel.rowCount, cols: sel.columnCount };
@@ -217,9 +222,11 @@ async function onChanged(e) {
   const sheetId = e.worksheetId;
   const sourceSet = new Set(state.sourceQuestions);
   let items = [];
+  let context = "";
 
   await Excel.run(async (ctx) => {
     const ws = ctx.workbook.worksheets.getItem(sheetId);
+    ws.load("name");
     const rng = ws.getRange(e.address);
     rng.load("rowIndex,columnIndex,rowCount,columnCount,cellCount");
     await ctx.sync();
@@ -254,6 +261,9 @@ async function onChanged(e) {
         state.snapshots.get(key) || { value: "", numberFormat: null, listOptions: null, listRule: null, header: null };
       items.push({
         key,
+        id: items.length,
+        sheet: ws.name,
+        address: L.cellAddress(rng.rowIndex + f.r, rng.columnIndex + f.c),
         row: rng.rowIndex + f.r,
         col: rng.columnIndex + f.c,
         question: f.question,
@@ -267,77 +277,119 @@ async function onChanged(e) {
     for (let r = 0; r < rng.rowCount; r++) {
       for (let c = 0; c < rng.columnCount; c++) state.snapshots.delete(keyAt(r, c));
     }
+
+    if (items.length > 0) {
+      try {
+        context = await readWorkbookContext(ctx, ws.name);
+      } catch (err) {
+        console.warn("[Respuestas IA] No se pudo leer el libro como contexto:", err);
+      }
+    }
   });
 
   if (items.length === 0) return;
   items.forEach((it) => state.pending.add(it.key));
 
   // La IA trabaja fuera de la cola para no bloquear Excel mientras responde.
-  answerAndWrite(sheetId, items).finally(() => items.forEach((it) => state.pending.delete(it.key)));
+  answerAndWrite(sheetId, items, context).finally(() => items.forEach((it) => state.pending.delete(it.key)));
 }
 
-async function answerAndWrite(sheetId, items) {
+/** Lee todas las hojas (valores, fórmulas y celdas vacías resaltadas para rellenar). */
+async function readWorkbookContext(ctx, activeName) {
+  const sheets = ctx.workbook.worksheets;
+  sheets.load("items/name,items/visibility");
+  await ctx.sync();
+  const visible = sheets.items.filter((s) => s.visibility === "Visible").slice(0, CONTEXT_MAX_SHEETS);
+  const used = visible.map((s) => {
+    const u = s.getUsedRangeOrNullObject(false);
+    u.load("isNullObject,rowIndex,columnIndex,rowCount,columnCount");
+    return { s, u };
+  });
+  await ctx.sync();
+
+  const parts = [];
+  for (const { s, u } of used) {
+    if (u.isNullObject) continue;
+    const rows = Math.min(u.rowCount, CONTEXT_MAX_ROWS);
+    const cols = Math.min(u.columnCount, CONTEXT_MAX_COLS);
+    const r = s.getRangeByIndexes(u.rowIndex, u.columnIndex, rows, cols);
+    r.load("formulas,values");
+    let props = null;
+    if (Office.context.requirements.isSetSupported("ExcelApi", "1.9")) {
+      props = r.getCellProperties({ format: { fill: { color: true } } });
+    }
+    parts.push({ name: s.name, u, r, props, rows, cols });
+  }
+  await ctx.sync();
+
+  const data = parts.map((p) => ({
+    name: p.name,
+    rowIndex: p.u.rowIndex,
+    columnIndex: p.u.columnIndex,
+    formulas: p.r.formulas,
+    values: p.r.values,
+    marks: p.props
+      ? p.props.value.map((row, i) =>
+          row.map((cp, j) => L.isEmpty(p.r.formulas[i][j]) && isLightFill(cp && cp.format && cp.format.fill && cp.format.fill.color))
+        )
+      : null,
+  }));
+  return L.buildWorkbookContext(data, activeName, { maxRows: CONTEXT_MAX_ROWS, maxCols: CONTEXT_MAX_COLS });
+}
+
+/** Relleno claro y de color (no blanco): así suelen marcarse las celdas a completar. */
+function isLightFill(color) {
+  if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)) return false;
+  const n = parseInt(color.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  if (r > 245 && g > 245 && b > 245) return false; // blanco
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 200;
+}
+
+async function answerAndWrite(sheetId, items, context) {
   const apiKey = readKey();
   if (!apiKey) {
     items.forEach((it) => (it.result = { ok: false, reason: "no_key" }));
   } else {
-    await resolveAnswers(apiKey, items);
+    await resolveAnswers(apiKey, items, context);
   }
   await enqueue(() => writeResults(sheetId, items));
 }
 
-async function resolveAnswers(apiKey, items) {
-  const toAsk = [];
-  for (const it of items) {
-    const cached = state.cache.get(`${it.expected.kind}|${it.question}`);
-    if (cached) it.ai = cached;
-    else toAsk.push(it);
-  }
-
-  if (toAsk.length > 0) {
-    const client = makeClient(apiKey);
-    // Preguntas repetidas en el mismo pegado se preguntan una sola vez.
-    const unique = new Map();
-    for (const it of toAsk) {
-      const k = `${it.expected.kind}|${it.question}`;
-      if (!unique.has(k)) unique.set(k, { id: unique.size, question: it.question, kind: it.expected.kind, k });
+async function resolveAnswers(apiKey, items, context) {
+  const client = makeClient(apiKey);
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    try {
+      const answers = await askAI(
+        client,
+        batch.map((it) => ({ id: it.id, sheet: it.sheet, address: it.address, question: it.question, kind: it.expected.kind })),
+        context
+      );
+      const byId = new Map(answers.map((a) => [a.id, a]));
+      batch.forEach((it) => (it.ai = byId.get(it.id) || null));
+    } catch (err) {
+      console.warn("[Respuestas IA] Error al consultar la IA:", err);
+      batch.forEach((it) => (it.ai = null));
     }
-    const list = [...unique.values()];
-    for (let i = 0; i < list.length; i += BATCH_SIZE) {
-      const batch = list.slice(i, i + BATCH_SIZE);
-      try {
-        const answers = await askAI(client, batch);
-        const byId = new Map(answers.map((a) => [a.id, a]));
-        for (const q of batch) {
-          const a = byId.get(q.id);
-          if (a && a.status === "ok") state.cache.set(q.k, a);
-          q.ai = a || null;
-        }
-      } catch (err) {
-        console.warn("[Respuestas IA] Error al consultar la IA:", err);
-        batch.forEach((q) => (q.ai = null));
-      }
-    }
-    for (const it of toAsk) it.ai = unique.get(`${it.expected.kind}|${it.question}`).ai;
   }
-
   for (const it of items) {
     it.result = it.ai ? L.coerceAnswer(it.ai, it.expected) : { ok: false, reason: "error" };
   }
 }
 
-async function askAI(client, batch) {
+async function askAI(client, batch, context) {
   const response = await client.beta.messages.create({
     model: MODEL,
     max_tokens: 16000,
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default", // si el modelo principal rechaza la petición, el servidor prueba con otro
     output_config: {
-      effort: "medium",
+      effort: "high", // escribir fórmulas correctas a partir del libro merece pensar más
       format: { type: "json_schema", schema: L.ANSWER_SCHEMA },
     },
     system: L.SYSTEM_PROMPT,
-    messages: [{ role: "user", content: L.buildUserMessage(batch) }],
+    messages: [{ role: "user", content: L.buildUserMessage(batch, context) }],
   });
   if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens") {
     throw new Error(`Respuesta incompleta (${response.stop_reason})`);
@@ -369,15 +421,21 @@ async function writeResults(sheetId, items) {
     const toUnmark = [];
     items.forEach((it, i) => {
       const cell = cells[i];
-      it.address = cell.address;
       // Si el usuario cambió la celda mientras la IA respondía, no se toca.
       if (cell.values[0][0] !== it.question) {
+        it.skipped = true;
         state.failed.delete(it.key);
         return;
       }
       if (it.result.ok) {
         if (it.snap.numberFormat != null) cell.numberFormat = [[it.snap.numberFormat]];
-        cell.values = [[it.result.value]];
+        if (it.result.formula) {
+          cell.formulas = [[it.result.formula]];
+          cell.load("valueTypes");
+          it.checkFormula = cell;
+        } else {
+          cell.values = [[it.result.value]];
+        }
         it.restoreList = it.snap.listRule && cell.dataValidation.type !== "List" ? cell : null;
         if (it.hadMarker) toUnmark.push(cell);
         state.failed.delete(it.key);
@@ -390,6 +448,31 @@ async function writeResults(sheetId, items) {
         if (!marked) toMark.push({ cell, text: it.result.reason === "no_key" ? NOTE_NO_KEY : NOTE_TEXT });
       }
     });
+    try {
+      await ctx.sync();
+    } catch (err) {
+      // Excel rechazó alguna fórmula (sintaxis no válida): se vuelve a lo pegado celda a celda.
+      console.warn("[Respuestas IA] Excel rechazó la escritura; se reintenta celda a celda:", err);
+      await writeOneByOne(ctx, ws, items, toMark, toUnmark);
+    }
+
+    // Una fórmula que da error (#¿NOMBRE?, #REF!, #DIV/0!…) no cuenta como respuesta.
+    for (const it of items) {
+      if (!it.checkFormula) continue;
+      let types;
+      try {
+        types = it.checkFormula.valueTypes;
+      } catch {
+        continue;
+      }
+      if (types && types[0] && types[0][0] === "Error") {
+        it.checkFormula.values = [[it.question]];
+        state.failed.set(it.key, { question: it.question, snap: it.snap, marked: true });
+        const i = toUnmark.indexOf(it.checkFormula);
+        if (i > -1) toUnmark.splice(i, 1);
+        else if (!it.hadMarker) toMark.push({ cell: it.checkFormula, text: NOTE_FORMULA });
+      }
+    }
     await ctx.sync();
 
     // Pasos secundarios: si fallan, la respuesta ya está escrita.
@@ -406,6 +489,37 @@ async function writeResults(sheetId, items) {
     for (const cell of toUnmark) await removeMarker(ctx, ws, cell);
     for (const m of toMark) await addMarker(ctx, ws, m.cell, m.text);
   });
+}
+
+/** Plan B si un lote falla: escribe cada fórmula por separado y deja lo pegado donde Excel no la acepte. */
+async function writeOneByOne(ctx, ws, items, toMark) {
+  for (const it of items) {
+    it.checkFormula = null;
+    if (!it.result.ok || it.skipped) continue;
+    const cell = ws.getRangeByIndexes(it.row, it.col, 1, 1);
+    cell.load("address");
+    try {
+      if (it.snap.numberFormat != null) cell.numberFormat = [[it.snap.numberFormat]];
+      if (it.result.formula) {
+        cell.formulas = [[it.result.formula]];
+        cell.load("valueTypes");
+      } else {
+        cell.values = [[it.result.value]];
+      }
+      await ctx.sync();
+      if (it.result.formula) it.checkFormula = cell;
+    } catch {
+      it.checkFormula = null;
+      try {
+        cell.values = [[it.question]];
+        await ctx.sync();
+      } catch {
+        // Sin más opciones: la celda queda como Excel la dejó.
+      }
+      state.failed.set(it.key, { question: it.question, snap: it.snap, marked: true });
+      if (!it.hadMarker) toMark.push({ cell, text: NOTE_FORMULA });
+    }
+  }
 }
 
 /* ---------- Marca discreta de error (nota; si no hay notas, comentario) ---------- */

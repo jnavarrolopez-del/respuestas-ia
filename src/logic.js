@@ -199,6 +199,14 @@
     return null;
   }
 
+  /** Acepta solo una fórmula de una línea que empiece por "=". Devuelve "" si no es válida. */
+  function cleanFormula(f) {
+    if (typeof f !== "string") return "";
+    const t = f.trim();
+    if (!t.startsWith("=") || t.length < 2 || t.length > 2000 || /[\r\n]/.test(t)) return "";
+    return t;
+  }
+
   /** Protege texto para que Excel no lo interprete como fórmula. */
   function safeText(s) {
     const t = String(s).trim();
@@ -214,6 +222,8 @@
     if (!ai || typeof ai !== "object") return { ok: false, reason: "unknown" };
     if (ai.status === "not_a_question") return { ok: false, reason: "not_a_question" };
     if (ai.status !== "ok") return { ok: false, reason: "unknown" };
+    const formula = cleanFormula(ai.formula);
+    if (formula) return { ok: true, formula };
     const answer = typeof ai.answer === "string" ? ai.answer.trim() : String(ai.answer ?? "").trim();
     const kind = (expected && expected.kind) || "auto";
 
@@ -288,8 +298,9 @@
             answer: { type: "string" },
             option_label: { type: "string" },
             option_text: { type: "string" },
+            formula: { type: "string" },
           },
-          required: ["id", "status", "answer", "option_label", "option_text"],
+          required: ["id", "status", "formula", "answer", "option_label", "option_text"],
           additionalProperties: false,
         },
       },
@@ -299,9 +310,19 @@
   };
 
   const SYSTEM_PROMPT = [
-    "Respondes preguntas que una persona tiene escritas en celdas de Excel. Tu respuesta se escribe tal cual en una celda.",
-    "Recibes un JSON con una lista de elementos {id, question, expected}. Devuelve un elemento por cada id.",
-    "Reglas:",
+    "Rellenas celdas de un libro de Excel. La persona copia un texto (una pregunta, una etiqueta como «Media aritmética» o el encabezado de una columna) y lo pega en una celda vacía: tú decides qué va en esa celda.",
+    "Recibes el CONTEXTO del libro (cada hoja con sus celdas no vacías: dirección, valor o fórmula, y las celdas marcadas [RELLENAR] que el libro señala para completar) y una lista de CELDAS {id, hoja, celda, texto_pegado, expected}. Devuelve un elemento por cada id.",
+    "",
+    "Cuándo usar formula:",
+    "- Si el valor de la celda se puede calcular con datos del libro, devuelve formula y deja answer vacío. Es lo preferido: el libro debe recalcularse si cambian los datos.",
+    "- Usa la posición de la celda para saber qué calcular: su fila (año, etiqueta de la columna A o de la columna de la izquierda) y su columna (encabezado). Si texto_pegado es un encabezado y se pegó en varias filas, cada fila lleva su propia fórmula.",
+    "- Sigue las instrucciones escritas en la propia hoja (por ejemplo «En C10 escribe =B10/B$10*100») y respeta su método: si piden calcular algo «a mano», hazlo con las celdas auxiliares de la hoja, no con una función que lo resuelva de golpe.",
+    "- Referencia celdas (también de otras hojas, como '2_Tasas'!D11 o Datos!B5); no escribas números que ya están en el libro.",
+    "- Sintaxis: fórmula de Excel en inglés, separador de argumentos coma, punto decimal, empezando por =. Ejemplos: =AVERAGE(B10:B19), =QUARTILE(B10:B19,1), =VAR.P(B10:B19), =STDEV.P(B10:B19), =IF(G12>G10+G21,\"Sí\",\"No\"), =INDEX(A10:A19,MATCH(G12,B10:B19,0)). Pon entre comillas simples los nombres de hoja que empiezan por número o tienen espacios.",
+    "- Para preguntas de interpretación que piden texto con cifras del libro, puedes devolver una fórmula que construya el texto (=\"…\"&TEXT(B5,\"0.00\")&\"…\") o un texto breve en answer.",
+    "",
+    "Cuándo usar answer (formula vacía):",
+    "- Preguntas de conocimiento general que no dependen del libro.",
     "- answer contiene solo el valor final: sin explicaciones, sin unidades salvo que la pregunta las pida, sin comillas, sin punto final, una sola línea.",
     "- expected = number: answer es solo el número, con punto decimal y sin separador de miles (ej. 1234.5).",
     "- expected = percent: answer es el número seguido de % (ej. 25%).",
@@ -309,16 +330,104 @@
     "- expected = short_text: unas pocas palabras como máximo.",
     "- expected = option o la pregunta es de tipo test: answer es el texto de la opción correcta tal como aparece; option_label es su letra o número si las opciones lo tienen (ej. b), si no cadena vacía; option_text es el texto de la opción sin la letra.",
     "- expected = auto: si la respuesta natural es un número, da solo el número; si es tipo test, rellena option_label y option_text; si no, texto breve.",
-    "- Si no es una pregunta ni una petición a la que se pueda responder, status = not_a_question.",
-    "- Si no sabes la respuesta con seguridad o falta información, status = unknown. No inventes.",
-    "- En cualquier otro caso status = ok. Rellena option_label y option_text con cadena vacía cuando no apliquen.",
+    "",
+    "Estado:",
+    "- Si el texto pegado no pide nada (por ejemplo, la persona solo está copiando un nombre o un dato a otra celda), status = not_a_question y no rellenes nada.",
+    "- Si no sabes qué poner con seguridad o falta información, status = unknown. No inventes.",
+    "- En cualquier otro caso status = ok. Deja vacíos (cadena vacía) los campos que no apliquen.",
     "- Responde en el idioma de la pregunta.",
   ].join("\n");
 
-  function buildUserMessage(items) {
-    return JSON.stringify(
-      items.map((it) => ({ id: it.id, question: it.question, expected: typeInstruction(it.kind) }))
-    );
+  /** Mensaje para la IA: contexto del libro (si lo hay) y las celdas a rellenar. */
+  function buildUserMessage(items, context) {
+    const cells = items.map((it) => ({
+      id: it.id,
+      hoja: it.sheet || "",
+      celda: it.address || "",
+      texto_pegado: it.question,
+      expected: typeInstruction(it.kind),
+    }));
+    const parts = [];
+    if (context) parts.push("CONTEXTO DEL LIBRO:\n" + context);
+    parts.push("CELDAS:\n" + JSON.stringify(cells));
+    return parts.join("\n\n");
+  }
+
+  /** Letra de columna a partir del índice (0 -> A, 26 -> AA). */
+  function columnLetter(index) {
+    let n = index + 1;
+    let s = "";
+    while (n > 0) {
+      const m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
+
+  function cellAddress(row, col) {
+    return columnLetter(col) + (row + 1);
+  }
+
+  /** Textos que se pueden copiar como "pregunta": cualquier texto escrito (no fórmulas). */
+  function collectTexts(values) {
+    const out = [];
+    const seen = new Set();
+    for (const row of values || []) {
+      for (const v of row || []) {
+        if (typeof v !== "string") continue;
+        const t = v.trim();
+        if (t.length < 2 || t.length > MAX_QUESTION_LENGTH || t.startsWith("=") || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Resume el libro como texto para la IA.
+   * sheets: [{ name, rowIndex, columnIndex, formulas: 2D, values?: 2D, marks?: 2D booleans (celda a rellenar) }]
+   * La hoja activa va primero y completa; el resto se recorta si el total supera maxChars.
+   */
+  function buildWorkbookContext(sheets, activeName, opts) {
+    const o = Object.assign({ maxRows: 120, maxCols: 26, maxCell: 300, maxChars: 80000 }, opts || {});
+    const ordered = [...sheets].sort((a, b) => (a.name === activeName ? -1 : b.name === activeName ? 1 : 0));
+    const blocks = [];
+    let total = 0;
+    for (const sh of ordered) {
+      const lines = [`### Hoja '${sh.name}'${sh.name === activeName ? " (activa)" : ""}`];
+      const rows = Math.min((sh.formulas || []).length, o.maxRows);
+      let truncated = (sh.formulas || []).length > o.maxRows;
+      for (let r = 0; r < rows; r++) {
+        const row = sh.formulas[r] || [];
+        if (row.length > o.maxCols) truncated = true;
+        for (let c = 0; c < Math.min(row.length, o.maxCols); c++) {
+          const v = row[c];
+          const mark = sh.marks && sh.marks[r] && sh.marks[r][c];
+          const empty = v === "" || v === null || v === undefined;
+          if (empty && !mark) continue;
+          let s = empty ? "" : String(v).replace(/\s+/g, " ");
+          // Para las fórmulas, también su resultado actual (si se conoce).
+          const val = sh.values && sh.values[r] ? sh.values[r][c] : undefined;
+          if (typeof v === "string" && v.startsWith("=") && val !== undefined && val !== "" && val !== null) {
+            s += ` → ${typeof val === "number" ? +val.toPrecision(10) : String(val).replace(/\s+/g, " ")}`;
+          }
+          if (s.length > o.maxCell) s = s.slice(0, o.maxCell) + "…";
+          lines.push(`${cellAddress(sh.rowIndex + r, sh.columnIndex + c)}: ${s}${mark ? " [RELLENAR]" : ""}`);
+        }
+      }
+      if (truncated) lines.push("(hoja recortada)");
+      let block = lines.join("\n");
+      if (total + block.length > o.maxChars) {
+        const room = o.maxChars - total;
+        if (room < 200) break;
+        block = block.slice(0, room) + "\n(recortado)";
+      }
+      blocks.push(block);
+      total += block.length;
+    }
+    return blocks.join("\n\n");
   }
 
   return {
@@ -332,10 +441,15 @@
     parseDate,
     matchOption,
     coerceAnswer,
+    cleanFormula,
     safeText,
     findPastedQuestions,
     ANSWER_SCHEMA,
     SYSTEM_PROMPT,
     buildUserMessage,
+    columnLetter,
+    cellAddress,
+    collectTexts,
+    buildWorkbookContext,
   };
 });

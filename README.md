@@ -1,12 +1,18 @@
 # Respuestas IA para Excel
 
-Copia una celda con una pregunta y pégala en una celda vacía: la respuesta aparece sola. Sin paneles ni avisos.
+Copia una celda con una pregunta, una etiqueta o un encabezado y pégala en una celda vacía: aparece sola la respuesta o la fórmula que corresponde a esa celda. Sin paneles ni avisos.
 
 ## Cómo funciona
 
-1. Al **seleccionar** celdas con preguntas (para copiarlas), el complemento guarda esos textos solo en memoria.
-2. Al **seleccionar el destino**, toma una foto local de esas celdas: si están vacías, su formato numérico y si tienen lista desplegable. Esta foto no sale del equipo.
-3. Al **pegar**, cada celda que estaba vacía y ahora contiene una de esas preguntas se envía a la IA (solo el texto de la pregunta y el tipo de respuesta esperado). La respuesta sustituye a la pregunta y se recupera el formato numérico y la lista desplegable que tenía la celda.
+1. Al **seleccionar** celdas con texto (para copiarlas), el complemento guarda esos textos solo en memoria.
+2. Al **seleccionar el destino**, toma una foto de esas celdas: si están vacías, su formato numérico y si tienen lista desplegable.
+3. Al **pegar**, cada celda que estaba vacía y ahora contiene uno de esos textos se envía a la IA junto con el **contenido del libro**: valores y fórmulas de sus hojas, marcando las celdas vacías con relleno claro (las que el libro pide completar).
+4. Si el valor se puede calcular con el libro, la IA devuelve una **fórmula** (por ejemplo `=AVERAGE(B10:B19)` o `='2_Tasas'!D11`); si no, un valor. Sustituye al texto pegado y se recupera el formato numérico y la lista desplegable que tenía la celda. Si la fórmula da error en Excel, no se deja escrita.
+
+**Ejemplos:**
+- Copia la etiqueta «Media aritmética (x̄)» (F10) y pégala en la celda vacía de al lado (G10): aparece `=AVERAGE(B10:B19)`.
+- Copia el encabezado «Índice en serie (base 2014=100)» (C9) y pégalo en todo el hueco de la columna (C10:C20): cada fila recibe su fórmula.
+- Copia «¿Cuál es la capital de Francia?» y pégala en una celda vacía: aparece «París».
 
 | Celda de destino | Respuesta escrita |
 |---|---|
@@ -17,10 +23,12 @@ Copia una celda con una pregunta y pégala en una celda vacía: la respuesta apa
 | Formato Texto (`@`) | Texto breve |
 | General | Número si la respuesta es un número; la letra de la opción si es tipo test; si no, texto breve |
 
-**Varias preguntas:** copia, por ejemplo, `A2:A10` y pega en `B2`. Cada celda recibe la respuesta de la pregunta que cayó en ella, en el mismo orden.
+La tabla de arriba se aplica cuando la IA devuelve un valor; las fórmulas se escriben tal cual, con el formato numérico que tenía la celda.
+
+**Varias preguntas:** copia, por ejemplo, `F10:F27` y pega en `G10`. Cada celda recibe lo que corresponde al texto que cayó en ella, en el mismo orden.
 
 **Estados:**
-- No es una pregunta, o la celda ya tenía contenido propio: no se hace nada.
+- El texto pegado no pide nada (solo estás copiando un dato), o la celda ya tenía contenido propio: no se hace nada.
 - Mientras responde la IA: la celda muestra la pregunta pegada hasta que llega la respuesta.
 - Error (sin conexión, la IA no lo sabe, la respuesta no encaja con el tipo de la celda): no se escribe nada y se añade una nota en la celda. Pega de nuevo en esa celda para reintentar; si sale bien, la nota desaparece.
 
@@ -61,13 +69,15 @@ Copia una celda con una pregunta y pégala en una celda vacía: la respuesta apa
 ## Privacidad
 
 - La clave se guarda en el almacenamiento local del complemento en este equipo, no en el libro.
-- A la IA solo se envía el texto de la pregunta y el tipo esperado (`number`, `percent`, `date`, `option`, `short_text` o `auto`). Ni encabezados, ni opciones de listas, ni otras celdas.
+- A la IA (Anthropic) se envía el texto pegado, la hoja y celda de destino, el tipo esperado y el **contenido de las hojas visibles del libro** (hasta 20 hojas, 120 filas y 26 columnas por hoja: valores y fórmulas). No uses el complemento en libros con datos que no quieras compartir con Anthropic.
+- Cada pegado que lo activa es una llamada de pago a la API. Con el contexto del libro, cuesta más que una pregunta suelta.
 - La última pregunta copiada y las fotos de las celdas de destino solo existen en memoria y se pierden al cerrar Excel.
 
 ## Limitaciones
 
 - Office no deja leer el portapapeles. Por eso el complemento identifica lo copiado como la **última selección de la hoja que contenía preguntas**, y lo reconoce al pegarlo. No funciona con preguntas copiadas desde otro programa u otro libro.
-- Las preguntas se detectan con una regla local: llevan `?`/`¿`, empiezan por una palabra interrogativa o una orden («Calcula…», «Indica…»), o tienen opciones `a) … b) …`.
+- Cualquier texto copiado de la hoja y pegado en una celda vacía activa el complemento; si la IA decide que no se pide nada, la celda queda con lo pegado. Por eso, copiar y pegar textos normales también hace una llamada a la IA.
+- La IA puede equivocarse en una fórmula aunque no dé error. Revisa los resultados, por ejemplo con los valores de control del libro.
 - Un pegado normal sobrescribe también colores y bordes del destino. El complemento solo recupera el formato numérico y la lista desplegable. Para conservar todo el formato, usa *Pegar valores*.
 - Si el destino tenía contenido, Excel ya lo ha sobrescrito al pegar. El complemento no lo toca más, y Ctrl+Z lo recupera.
 - Como máximo 400 celdas por pegado.
