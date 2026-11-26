@@ -162,6 +162,29 @@ test("buildWorkbookContext: hoja activa primero, celdas a rellenar marcadas, rec
   assert.ok(small.length <= 300);
 });
 
+test("pickSolveTargets: celdas marcadas primero, sin celdas tapadas por combinaciones", () => {
+  const f = [
+    ["Año", "Precio", "", ""],
+    [2014, 8.2, "", ""],
+    [2015, 8.45, "", "x"],
+  ];
+  const marked = (r, c) => r > 0 && c === 2;
+  assert.deepEqual(L.pickSolveTargets(f, marked, () => false), [{ r: 1, c: 2 }, { r: 2, c: 2 }]);
+  // Sin marcas: todas las vacías, salvo las tapadas.
+  assert.deepEqual(L.pickSolveTargets(f, () => false, (r, c) => c === 3), [{ r: 0, c: 2 }, { r: 1, c: 2 }, { r: 2, c: 2 }]);
+  // Sin marcas y demasiadas vacías: nada (no rellenar media hoja por error).
+  assert.deepEqual(L.pickSolveTargets(f, () => false, () => false, 2), []);
+});
+
+test("solo los errores de fórmula mal escrita invalidan la respuesta", () => {
+  for (const e of ["#NAME?", "#¿NOMBRE?", "#REF!", "#NULL!", "#¡NULO!"]) assert.ok(L.isBrokenFormulaError(e), e);
+  for (const e of ["#DIV/0!", "#N/A", "#VALUE!", "#¡VALOR!", "#¡DIV/0!", 12]) assert.ok(!L.isBrokenFormulaError(e), String(e));
+});
+
+test("el aviso a la IA explica el modo resolver (texto vacío)", () => {
+  assert.ok(L.SYSTEM_PROMPT.includes("texto_pegado está vacío"));
+});
+
 test("el esquema de respuesta exige la fórmula", () => {
   assert.ok(L.ANSWER_SCHEMA.properties.answers.items.required.includes("formula"));
 });

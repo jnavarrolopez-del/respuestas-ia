@@ -27,7 +27,8 @@ const CONTEXT_MAX_COLS = 26;
 const NOTE_MARK = "Respuestas IA:";
 const NOTE_TEXT = `${NOTE_MARK} no se pudo obtener la respuesta. Vuelve a pegar la pregunta aquí para reintentar.`;
 const NOTE_FORMULA = `${NOTE_MARK} la fórmula propuesta daba error y no se ha escrito. Vuelve a pegar aquí para reintentar.`;
-const NOTE_NO_KEY = `${NOTE_MARK} falta la clave de acceso a la IA (Inicio > Configurar clave). Después, vuelve a pegar.`;
+const NOTE_SOLVE = `${NOTE_MARK} no se pudo completar alguna celda de la selección. Vuelve a seleccionar y pulsa Ctrl+Alt+R para reintentar.`;
+const NOTE_NO_KEY = `${NOTE_MARK} falta la clave de acceso a la IA (Inicio > Configurar clave). Después, vuelve a intentarlo.`;
 
 /* ---------- Clave de acceso ---------- */
 
@@ -294,6 +295,110 @@ async function onChanged(e) {
   answerAndWrite(sheetId, items, context).finally(() => items.forEach((it) => state.pending.delete(it.key)));
 }
 
+/* ---------- Resolver selección (atajo Ctrl+Alt+R o botón) ---------- */
+
+const SOLVE_MAX_AREA = 5000; // celdas que se examinan de la selección
+const SOLVE_MAX_TARGETS = 200; // celdas que se rellenan de una vez
+const SOLVE_BATCH = 80; // celdas por llamada a la IA en este modo
+
+let solving = false;
+
+/**
+ * Rellena con la IA las celdas vacías de la selección: si hay celdas con relleno claro
+ * (las que el libro marca para completar), solo esas; si no, las vacías (hasta 60).
+ * Con toda la hoja seleccionada (Ctrl+A) resuelve todas las celdas amarillas vacías.
+ */
+export async function solveSelection() {
+  if (solving) return;
+  solving = true;
+  try {
+    let sheetId = null;
+    let items = [];
+    let context = "";
+    await enqueue(() =>
+      Excel.run(async (ctx) => {
+        const ws = ctx.workbook.worksheets.getActiveWorksheet();
+        ws.load("id,name");
+        const sel = ctx.workbook.getSelectedRange();
+        const used = ws.getUsedRangeOrNullObject(false);
+        used.load("isNullObject");
+        await ctx.sync();
+        if (used.isNullObject) return;
+        const area = sel.getIntersectionOrNullObject(used);
+        area.load("isNullObject,rowIndex,columnIndex,rowCount,columnCount,cellCount");
+        await ctx.sync();
+        if (area.isNullObject || area.cellCount > SOLVE_MAX_AREA) return;
+
+        area.load("formulas");
+        const props = area.getCellProperties({ format: { fill: { color: true } } });
+        let merged = null;
+        if (Office.context.requirements.isSetSupported("ExcelApi", "1.13")) {
+          merged = area.getMergedAreasOrNullObject();
+          merged.load("isNullObject,areas/items/rowIndex,areas/items/columnIndex,areas/items/rowCount,areas/items/columnCount");
+        }
+        await ctx.sync();
+
+        // Celdas tapadas por una combinación (todas menos la de arriba a la izquierda).
+        const covered = new Set();
+        if (merged && !merged.isNullObject) {
+          for (const m of merged.areas.items) {
+            for (let r = 0; r < m.rowCount; r++) {
+              for (let c = 0; c < m.columnCount; c++) {
+                if (r || c) covered.add(`${m.rowIndex + r}|${m.columnIndex + c}`);
+              }
+            }
+          }
+        }
+        const fill = (r, c) => {
+          const cp = props.value[r] && props.value[r][c];
+          return cp && cp.format && cp.format.fill && cp.format.fill.color;
+        };
+        const targets = L.pickSolveTargets(
+          area.formulas,
+          (r, c) => isLightFill(fill(r, c)),
+          (r, c) => covered.has(`${area.rowIndex + r}|${area.columnIndex + c}`),
+          60
+        ).slice(0, SOLVE_MAX_TARGETS);
+        if (!targets.length) return;
+
+        sheetId = ws.id;
+        for (const t of targets) {
+          const row = area.rowIndex + t.r;
+          const col = area.columnIndex + t.c;
+          const key = cellKey(ws.id, row, col);
+          if (state.pending.has(key)) continue;
+          const prevFail = state.failed.get(key);
+          const snap = { value: "", numberFormat: null, listOptions: null, listRule: null, header: null };
+          items.push({
+            key,
+            id: items.length,
+            sheet: ws.name,
+            address: L.cellAddress(row, col),
+            row,
+            col,
+            question: "",
+            snap,
+            expected: { kind: "auto" },
+            hadMarker: !!(prevFail && prevFail.marked),
+          });
+        }
+        if (items.length) context = await readWorkbookContext(ctx, ws.name);
+      })
+    );
+    if (!items.length) return;
+    items.forEach((it) => state.pending.add(it.key));
+    try {
+      await answerAndWrite(sheetId, items, context, { batchSize: SOLVE_BATCH, singleMarker: true });
+    } finally {
+      items.forEach((it) => state.pending.delete(it.key));
+    }
+  } catch (err) {
+    console.warn("[Respuestas IA] No se pudo resolver la selección:", err);
+  } finally {
+    solving = false;
+  }
+}
+
 /** Lee todas las hojas (valores, fórmulas y celdas vacías resaltadas para rellenar). */
 async function readWorkbookContext(ctx, activeName) {
   const sheets = ctx.workbook.worksheets;
@@ -346,20 +451,20 @@ function isLightFill(color) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 200;
 }
 
-async function answerAndWrite(sheetId, items, context) {
+async function answerAndWrite(sheetId, items, context, opts = {}) {
   const apiKey = readKey();
   if (!apiKey) {
     items.forEach((it) => (it.result = { ok: false, reason: "no_key" }));
   } else {
-    await resolveAnswers(apiKey, items, context);
+    await resolveAnswers(apiKey, items, context, opts.batchSize || BATCH_SIZE);
   }
-  await enqueue(() => writeResults(sheetId, items));
+  await enqueue(() => writeResults(sheetId, items, opts));
 }
 
-async function resolveAnswers(apiKey, items, context) {
+async function resolveAnswers(apiKey, items, context, batchSize) {
   const client = makeClient(apiKey);
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    const batch = items.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
     try {
       const answers = await askAI(
         client,
@@ -379,9 +484,10 @@ async function resolveAnswers(apiKey, items, context) {
 }
 
 async function askAI(client, batch, context) {
-  const response = await client.beta.messages.create({
+  // En streaming: con muchas celdas la respuesta puede ser larga y así no corta por tiempo.
+  const stream = client.beta.messages.stream({
     model: MODEL,
-    max_tokens: 16000,
+    max_tokens: 64000,
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default", // si el modelo principal rechaza la petición, el servidor prueba con otro
     output_config: {
@@ -391,6 +497,7 @@ async function askAI(client, batch, context) {
     system: L.SYSTEM_PROMPT,
     messages: [{ role: "user", content: L.buildUserMessage(batch, context) }],
   });
+  const response = await stream.finalMessage();
   if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens") {
     throw new Error(`Respuesta incompleta (${response.stop_reason})`);
   }
@@ -402,7 +509,7 @@ async function askAI(client, batch, context) {
   return Array.isArray(parsed.answers) ? parsed.answers : [];
 }
 
-async function writeResults(sheetId, items) {
+async function writeResults(sheetId, items, opts = {}) {
   await Excel.run(async (ctx) => {
     const ws = ctx.workbook.worksheets.getItemOrNullObject(sheetId);
     ws.load("isNullObject");
@@ -431,7 +538,7 @@ async function writeResults(sheetId, items) {
         if (it.snap.numberFormat != null) cell.numberFormat = [[it.snap.numberFormat]];
         if (it.result.formula) {
           cell.formulas = [[it.result.formula]];
-          cell.load("valueTypes");
+          cell.load("values,valueTypes");
           it.checkFormula = cell;
         } else {
           cell.values = [[it.result.value]];
@@ -445,7 +552,10 @@ async function writeResults(sheetId, items) {
       } else {
         const marked = it.hadMarker;
         state.failed.set(it.key, { question: it.question, snap: it.snap, marked: true });
-        if (!marked) toMark.push({ cell, text: it.result.reason === "no_key" ? NOTE_NO_KEY : NOTE_TEXT });
+        if (!marked) {
+          const text = it.result.reason === "no_key" ? NOTE_NO_KEY : it.question ? NOTE_TEXT : NOTE_SOLVE;
+          toMark.push({ cell, text });
+        }
       }
     });
     try {
@@ -456,16 +566,18 @@ async function writeResults(sheetId, items) {
       await writeOneByOne(ctx, ws, items, toMark, toUnmark);
     }
 
-    // Una fórmula que da error (#¿NOMBRE?, #REF!, #DIV/0!…) no cuenta como respuesta.
+    // Una fórmula mal escrita (#¿NOMBRE?, #REF!…) no cuenta como respuesta. #DIV/0! o #N/A se aceptan:
+    // pueden deberse a celdas que aún no se han rellenado y se arreglan solas al completarlas.
     for (const it of items) {
       if (!it.checkFormula) continue;
-      let types;
+      let types, values;
       try {
         types = it.checkFormula.valueTypes;
+        values = it.checkFormula.values;
       } catch {
         continue;
       }
-      if (types && types[0] && types[0][0] === "Error") {
+      if (types && types[0] && types[0][0] === "Error" && L.isBrokenFormulaError(values[0][0])) {
         it.checkFormula.values = [[it.question]];
         state.failed.set(it.key, { question: it.question, snap: it.snap, marked: true });
         const i = toUnmark.indexOf(it.checkFormula);
@@ -474,6 +586,9 @@ async function writeResults(sheetId, items) {
       }
     }
     await ctx.sync();
+
+    // Al resolver una zona, una sola nota aunque fallen varias celdas.
+    if (opts.singleMarker && toMark.length > 1) toMark.splice(1);
 
     // Pasos secundarios: si fallan, la respuesta ya está escrita.
     for (const it of items) {
@@ -502,7 +617,7 @@ async function writeOneByOne(ctx, ws, items, toMark) {
       if (it.snap.numberFormat != null) cell.numberFormat = [[it.snap.numberFormat]];
       if (it.result.formula) {
         cell.formulas = [[it.result.formula]];
-        cell.load("valueTypes");
+        cell.load("values,valueTypes");
       } else {
         cell.values = [[it.result.value]];
       }

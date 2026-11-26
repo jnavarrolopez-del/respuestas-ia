@@ -3,7 +3,7 @@
  * Al abrir el libro se carga en segundo plano (sin panel) y registra los eventos.
  * Si el usuario abre el panel desde "Configurar clave", muestra el formulario.
  */
-import { registerHandlers, readKey, writeKey, makeClient, MODEL } from "./addin.js";
+import { registerHandlers, readKey, writeKey, makeClient, MODEL, solveSelection } from "./addin.js";
 
 const form = document.getElementById("form");
 const input = document.getElementById("key");
@@ -69,6 +69,18 @@ form.addEventListener("submit", async (ev) => {
 
 Office.onReady(async (info) => {
   if (info.host !== Office.HostType.Excel) return;
+  // Atajo Ctrl+Alt+R y botón «Resolver selección».
+  try {
+    Office.actions.associate("resolverSeleccion", async (event) => {
+      try {
+        await solveSelection();
+      } finally {
+        if (event && typeof event.completed === "function") event.completed();
+      }
+    });
+  } catch (err) {
+    console.warn("[Respuestas IA] No se pudo registrar el atajo:", err);
+  }
   try {
     await registerHandlers();
   } catch (err) {

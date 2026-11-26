@@ -199,6 +199,34 @@
     return null;
   }
 
+  /**
+   * ¿Un error de Excel indica una fórmula mal escrita (y no solo datos que aún faltan)?
+   * #¿NOMBRE?/#NAME?, #REF!, #NULL!: fórmula incorrecta. #DIV/0!, #N/A, #VALUE!: puede faltar rellenar otras celdas.
+   */
+  function isBrokenFormulaError(value) {
+    const v = normalize(value).toUpperCase();
+    return /#\W*(NAME|NOMBRE|REF|NULL|NULO)\b/.test(v);
+  }
+
+  /**
+   * Celdas a resolver dentro de una selección.
+   * formulas: 2D del área; marked(r,c): celda con relleno claro; covered(r,c): parte no principal de una celda combinada.
+   * Si hay celdas vacías marcadas, solo esas; si no, las vacías (como mucho maxUnmarked).
+   */
+  function pickSolveTargets(formulas, marked, covered, maxUnmarked) {
+    const empties = [];
+    const marks = [];
+    (formulas || []).forEach((row, r) =>
+      (row || []).forEach((v, c) => {
+        if (!isEmpty(v) || (covered && covered(r, c))) return;
+        empties.push({ r, c });
+        if (marked && marked(r, c)) marks.push({ r, c });
+      })
+    );
+    if (marks.length) return marks;
+    return empties.length <= (maxUnmarked == null ? 60 : maxUnmarked) ? empties : [];
+  }
+
   /** Acepta solo una fórmula de una línea que empiece por "=". Devuelve "" si no es válida. */
   function cleanFormula(f) {
     if (typeof f !== "string") return "";
@@ -315,6 +343,8 @@
     "",
     "Cuándo usar formula:",
     "- Si el valor de la celda se puede calcular con datos del libro, devuelve formula y deja answer vacío. Es lo preferido: el libro debe recalcularse si cambian los datos.",
+    "- Si texto_pegado está vacío, la persona ha seleccionado la celda y ha pedido «resolver»: deduce qué va ahí por su posición, por las instrucciones de la hoja y por el enunciado. Si en esa celda no debe ir nada, status = not_a_question.",
+    "- Cuando rellenes varias celdas de una misma tabla, usa fórmulas coherentes entre filas (la misma fórmula desplazada) y referencias entre ellas cuando el método lo pida (por ejemplo, la varianza a partir de la suma de la columna auxiliar).",
     "- Usa la posición de la celda para saber qué calcular: su fila (año, etiqueta de la columna A o de la columna de la izquierda) y su columna (encabezado). Si texto_pegado es un encabezado y se pegó en varias filas, cada fila lleva su propia fórmula.",
     "- Sigue las instrucciones escritas en la propia hoja (por ejemplo «En C10 escribe =B10/B$10*100») y respeta su método: si piden calcular algo «a mano», hazlo con las celdas auxiliares de la hoja, no con una función que lo resuelva de golpe.",
     "- Referencia celdas (también de otras hojas, como '2_Tasas'!D11 o Datos!B5); no escribas números que ya están en el libro.",
@@ -442,6 +472,8 @@
     matchOption,
     coerceAnswer,
     cleanFormula,
+    isBrokenFormulaError,
+    pickSolveTargets,
     safeText,
     findPastedQuestions,
     ANSWER_SCHEMA,

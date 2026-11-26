@@ -1,0 +1,18 @@
+{
+  "actions": [
+    {
+      "id": "resolverSeleccion",
+      "type": "ExecuteFunction",
+      "name": "Resolver la selección con IA"
+    }
+  ],
+  "shortcuts": [
+    {
+      "action": "resolverSeleccion",
+      "key": {
+        "default": "Ctrl+Alt+R",
+        "mac": "Command+Option+R"
+      }
+    }
+  ]
+}

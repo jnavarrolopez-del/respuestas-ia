@@ -64,6 +64,21 @@
                     <SourceLocation resid="Taskpane.Url"/>
                   </Action>
                 </Control>
+                <Control xsi:type="Button" id="RespuestasIA.SolveButton">
+                  <Label resid="Solve.Label"/>
+                  <Supertip>
+                    <Title resid="Solve.Label"/>
+                    <Description resid="Solve.Tooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>resolverSeleccion</FunctionName>
+                  </Action>
+                </Control>
               </Group>
             </OfficeTab>
           </ExtensionPoint>
@@ -82,10 +97,13 @@
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Respuestas IA"/>
         <bt:String id="Button.Label" DefaultValue="Configurar clave"/>
+        <bt:String id="Solve.Label" DefaultValue="Resolver selección"/>
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="Button.Tooltip" DefaultValue="Solo hace falta una vez: introduce tu clave de acceso a la IA."/>
+        <bt:String id="Solve.Tooltip" DefaultValue="Rellena con IA las celdas vacías marcadas de la selección (atajo: Ctrl+Alt+R). Con Ctrl+A resuelve toda la hoja."/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
+  <ExtendedOverrides Url="https://jnavarrolopez-del.github.io/respuestas-ia/src/shortcuts.json"/>
 </OfficeApp>

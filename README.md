@@ -7,9 +7,17 @@ Copia una celda con una pregunta, una etiqueta o un encabezado y pégala en una 
 1. Al **seleccionar** celdas con texto (para copiarlas), el complemento guarda esos textos solo en memoria.
 2. Al **seleccionar el destino**, toma una foto de esas celdas: si están vacías, su formato numérico y si tienen lista desplegable.
 3. Al **pegar**, cada celda que estaba vacía y ahora contiene uno de esos textos se envía a la IA junto con el **contenido del libro**: valores y fórmulas de sus hojas, marcando las celdas vacías con relleno claro (las que el libro pide completar).
-4. Si el valor se puede calcular con el libro, la IA devuelve una **fórmula** (por ejemplo `=AVERAGE(B10:B19)` o `='2_Tasas'!D11`); si no, un valor. Sustituye al texto pegado y se recupera el formato numérico y la lista desplegable que tenía la celda. Si la fórmula da error en Excel, no se deja escrita.
+4. Si el valor se puede calcular con el libro, la IA devuelve una **fórmula** (por ejemplo `=AVERAGE(B10:B19)` o `='2_Tasas'!D11`); si no, un valor. Sustituye al texto pegado y se recupera el formato numérico y la lista desplegable que tenía la celda. Si la fórmula está mal escrita (#¿NOMBRE?, #REF!), no se deja.
 
-**Ejemplos:**
+### Resolver una zona o una hoja entera (Ctrl+Alt+R)
+
+1. Selecciona la zona que quieres resolver, o toda la hoja con **Ctrl+A**.
+2. Pulsa **Ctrl+Alt+R** (en Mac, Cmd+Opción+R), o el botón **Inicio → Resolver selección**.
+3. La IA rellena las **celdas vacías con relleno claro** (las amarillas que el libro marca para completar). Si la zona no tiene celdas marcadas, rellena sus celdas vacías (hasta 60).
+
+No hace falta copiar el enunciado ni los datos: la IA ya lee todas las hojas del libro. Conviene resolver las hojas en orden, porque unas usan los resultados de otras. Una fórmula que da #DIV/0! o #N/A se deja escrita, porque suele deberse a celdas que aún faltan y se arregla sola al completarlas. Las que dan #¿NOMBRE? o #REF! no se escriben.
+
+**Ejemplos con pegar:**
 - Copia la etiqueta «Media aritmética (x̄)» (F10) y pégala en la celda vacía de al lado (G10): aparece `=AVERAGE(B10:B19)`.
 - Copia el encabezado «Índice en serie (base 2014=100)» (C9) y pégalo en todo el hueco de la columna (C10:C20): cada fila recibe su fórmula.
 - Copia «¿Cuál es la capital de Francia?» y pégala en una celda vacía: aparece «París».
