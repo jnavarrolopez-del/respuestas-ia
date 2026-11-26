@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Respuestas IA</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="logic.js"></script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1f1f1f;        /* 16,1:1 sobre blanco */
+      --muted: #545454;       /* 7,6:1 */
+      --border: #767676;      /* 4,5:1, borde de campos */
+      --accent: #107c41;      /* verde Excel, 5,3:1 con texto blanco */
+      --accent-hover: #0c5e31;
+      --disabled-bg: #e6e6e6;
+      --disabled-text: #4a4a4a; /* 7,6:1 sobre #e6e6e6 */
+      --error: #a4262c;       /* 6,9:1 */
+      --ok: #0c5e31;          /* 7,9:1 */
+      --focus: #0f6cbd;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    body {
+      font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+      padding: 20px 16px;
+      max-width: 480px;
+      overflow-wrap: anywhere;
+    }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+    p { margin: 0 0 16px; }
+    .hint { color: var(--muted); font-size: 14px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      font: inherit;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    button {
+      width: 100%;
+      min-height: 44px;
+      margin-top: 12px;
+      padding: 10px 16px;
+      font: inherit;
+      font-weight: 600;
+      color: #ffffff;
+      background: var(--accent);
+      border: 0;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { background: var(--disabled-bg); color: var(--disabled-text); cursor: default; }
+    #status { min-height: 24px; margin: 12px 0 0; }
+    #status.error { color: var(--error); }
+    #status.ok { color: var(--ok); }
+    ol { margin: 0 0 16px; padding-left: 22px; }
+    li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Respuestas IA</h1>
+    <p>Introduce tu clave de acceso a la IA. Solo hace falta una vez.</p>
+
+    <form id="form" novalidate>
+      <label for="key">Clave de acceso (Anthropic)</label>
+      <input id="key" name="key" type="password" autocomplete="off" spellcheck="false"
+             placeholder="sk-ant-…" aria-describedby="keyHint status">
+      <p id="keyHint" class="hint" style="margin-top:6px">Se guarda solo en este equipo. No se escribe en el libro.</p>
+      <button id="save" type="submit" disabled>Guardar clave</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="hint">Uso: copia una celda con una pregunta y pégala en una celda vacía. La respuesta aparece sola.</p>
+  </main>
+  <script type="module" src="taskpane.js"></script>
+</body>
+</html>
